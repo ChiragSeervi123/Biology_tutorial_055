@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ACO Antivirus Scanner - Working Model</title>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin
+    src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      font-family: system-ui, -apple-system, sans-serif;
+      overflow-x: hidden;
+    }
+
+    #root {
+      width: 100vw;
+      min-height: 100vh;
+    }
+
+    .path-line {
+      stroke-width: 3;
+      fill: none;
+      stroke-dasharray: 5, 5;
+      animation: dash 20s linear infinite;
+    }
+
+    @keyframes dash {
+      to {
+        stroke-dashoffset: -1000;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .file-grid {
+        transform: scale(0.85);
+        transform-origin: top left;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const ACOAntivirusModel = () => {
+      const [isRunning, setIsRunning] = useState(false);
+      const [step, setStep] = useState(0);
+      const [ants, setAnts] = useState([]);
+      const [files, setFiles] = useState([]);
+      const [threats, setThreats] = useState([]);
+      const [scannedCount, setScannedCount] = useState(0);
+      const [virusFound, setVirusFound] = useState(0);
+      const [currentPhase, setCurrentPhase] = useState('Initialization');
+      const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+      const [showShortestPath, setShowShortestPath] = useState(false);
+      const [shortestPath, setShortestPath] = useState([]);
+      const [bestPath, setBestPath] = useState([]);
+      const [pathComparison, setPathComparison] = useState(null);
+
+      useEffect(() => {
+        const handleResize = () => {
+          setIsMobile(window.innerWidth < 768);
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+      }, []);
+
+      const initializeFiles = () => {
+        const fileTypes = [
+          { name: 'system.exe', type: 'executable', risk: 0.8, hasVirus: false },
+          { name: 'document.pdf', type: 'document', risk: 0.2, hasVirus: false },
+          { name: 'download.zip', type: 'download', risk: 0.9, hasVirus: true },
+          { name: 'photo.jpg', type: 'image', risk: 0.1, hasVirus: false },
+          { name: 'email_attach.exe', type: 'email', risk: 0.85, hasVirus: true },
+          { name: 'music.mp3', type: 'media', risk: 0.15, hasVirus: false },
+          { name: 'script.js', type: 'script', risk: 0.7, hasVirus: false },
+          { name: 'temp_file.tmp', type: 'temp', risk: 0.75, hasVirus: true },
+          { name: 'backup.bak', type: 'backup', risk: 0.3, hasVirus: false },
+          { name: 'config.ini', type: 'config', risk: 0.4, hasVirus: false },
+          { name: 'plugin.dll', type: 'executable', risk: 0.65, hasVirus: false },
+          { name: 'readme.txt', type: 'document', risk: 0.1, hasVirus: false },
+        ];
+
+        return fileTypes.map((file, idx) => ({
+          ...file,
+          id: idx,
+          pheromone: file.risk * 50,
+          scanned: false,
+          x: (idx % 4) * 140 + 50,
+          y: Math.floor(idx / 4) * 100 + 50,
+        }));
+      };
+
+      const initializeAnts = () => {
+        return Array.from({ length: 3 }, (_, i) => ({
+          id: i,
+          currentFile: null,
+          path: [],
+          color: ['#3b82f6', '#10b981', '#f59e0b'][i],
+          x: 20,
+          y: 20 + i * 30,
+        }));
+      };
+
+      // Calculate shortest path using greedy algorithm (prioritize high-risk files)
+      const calculateShortestPath = () => {
+        const sortedFiles = [...files].sort((a, b) => b.risk - a.risk);
+        return sortedFiles.map(f => f.id);
+      };
+
+      useEffect(() => {
+        const initialFiles = initializeFiles();
+        setFiles(initialFiles);
+        setAnts(initializeAnts());
+
+        // Calculate theoretical shortest path
+        const theoreticalPath = initialFiles
+          .sort((a, b) => b.risk - a.risk)
+          .map(f => f.id);
+        setShortestPath(theoreticalPath);
+      }, []);
+
+      useEffect(() => {
+        if (!isRunning) return;
+
+        const interval = setInterval(() => {
+          setStep(prev => {
+            const next = prev + 1;
+
+            if (next <= 15) {
+              setCurrentPhase('Ants Exploring Files');
+              moveAnts();
+            } else if (next <= 20) {
+              setCurrentPhase('Updating Pheromones');
+              updatePheromones();
+            } else if (next <= 25) {
+              setCurrentPhase('Pheromone Evaporation');
+              evaporatePheromones();
+            } else {
+              setCurrentPhase('Scan Complete');
+              setIsRunning(false);
+              calculateBestPath();
+              return next;
+            }
+
+            return next;
+          });
+        }, 600);
+
+        return () => clearInterval(interval);
+      }, [isRunning, files]);
+
+      const moveAnts = () => {
+        setAnts(prevAnts =>
+          prevAnts.map(ant => {
+            const unscannedFiles = files.filter(f => !f.scanned);
+            if (unscannedFiles.length === 0) return ant;
+
+            const totalPheromone = unscannedFiles.reduce((sum, f) => sum + f.pheromone, 0);
+            let random = Math.random() * totalPheromone;
+            let selectedFile = unscannedFiles[0];
+
+            for (let file of unscannedFiles) {
+              random -= file.pheromone;
+              if (random <= 0) {
+                selectedFile = file;
+                break;
+              }
+            }
+
+            return {
+              ...ant,
+              currentFile: selectedFile.id,
+              x: selectedFile.x,
+              y: selectedFile.y,
+              path: [...ant.path, selectedFile.id],
+            };
+          })
+        );
+
+        setFiles(prevFiles =>
+          prevFiles.map(file => {
+            const isBeingScanned = ants.some(ant => ant.currentFile === file.id);
+            if (isBeingScanned && !file.scanned) {
+              setScannedCount(prev => prev + 1);
+              if (file.hasVirus) {
+                setVirusFound(prev => prev + 1);
+                setThreats(prev => [...prev, file.name]);
+              }
+              return { ...file, scanned: true };
+            }
+            return file;
+          })
+        );
+      };
+
+      const updatePheromones = () => {
+        setFiles(prevFiles =>
+          prevFiles.map(file => {
+            let boost = 0;
+            if (file.hasVirus && file.scanned) {
+              boost = 30;
+            }
+            if (file.scanned) {
+              boost += 5;
+            }
+            return {
+              ...file,
+              pheromone: Math.min(100, file.pheromone + boost),
+            };
+          })
+        );
+      };
+
+      const evaporatePheromones = () => {
+        setFiles(prevFiles =>
+          prevFiles.map(file => ({
+            ...file,
+            pheromone: Math.max(10, file.pheromone * 0.9),
+          }))
+        );
+      };
+
+      const calculateBestPath = () => {
+        // Find the ant that discovered viruses fastest
+        let bestAnt = null;
+        let minStepsToVirus = Infinity;
+
+        ants.forEach(ant => {
+          let stepsToFirstVirus = 0;
+          for (let i = 0; i < ant.path.length; i++) {
+            const file = files.find(f => f.id === ant.path[i]);
+            stepsToFirstVirus++;
+            if (file && file.hasVirus) {
+              if (stepsToFirstVirus < minStepsToVirus) {
+                minStepsToVirus = stepsToFirstVirus;
+                bestAnt = ant;
+              }
+              break;
+            }
+          }
+        });
+
+        if (bestAnt) {
+          setBestPath(bestAnt.path);
+
+          // Compare with theoretical shortest path
+          const theoreticalSteps = shortestPath.findIndex(id => {
+            const file = files.find(f => f.id === id);
+            return file && file.hasVirus;
+          }) + 1;
+
+          setPathComparison({
+            acoSteps: minStepsToVirus,
+            theoreticalSteps: theoreticalSteps,
+            efficiency: ((theoreticalSteps / minStepsToVirus) * 100).toFixed(1)
+          });
+        }
+      };
+
+      const reset = () => {
+        setIsRunning(false);
+        setStep(0);
+        setScannedCount(0);
+        setVirusFound(0);
+        setThreats([]);
+        setCurrentPhase('Initialization');
+        setBestPath([]);
+        setPathComparison(null);
+        const initialFiles = initializeFiles();
+        setFiles(initialFiles);
+        setAnts(initializeAnts());
+      };
+
+      const getFileIcon = (type) => {
+        if (type === 'executable' || type === 'script') return '⚙️';
+        if (type === 'document') return '📄';
+        if (type === 'image') return '🖼️';
+        if (type === 'download' || type === 'email') return '📥';
+        return '📁';
+      };
+
+      const getFileColor = (file) => {
+        if (file.hasVirus && file.scanned) return 'bg-red-500';
+        if (file.scanned) return 'bg-green-500';
+        return 'bg-gray-400';
+      };
+
+      const getPheromoneOpacity = (pheromone) => {
+        return pheromone / 100;
+      };
+
+      // Draw path lines
+      const renderPathLines = (path, color, opacity = 0.6, dashed = true) => {
+        if (path.length < 2) return null;
+
+        const pathString = path.map((fileId, idx) => {
+          const file = files.find(f => f.id === fileId);
+          if (!file) return '';
+          const x = file.x + 32;
+          const y = file.y + 32;
+          return idx === 0 ? `M ${x} ${y}` : `L ${x} ${y}`;
+        }).join(' ');
+
+        return (
+          <path
+            d={pathString}
+            className={dashed ? "path-line" : ""}
+            stroke={color}
+            strokeOpacity={opacity}
+            strokeWidth={dashed ? "3" : "2"}
+            fill="none"
+            strokeDasharray={dashed ? "5, 5" : "0"}
+          />
+        );
+      };
+
+      return (
+        <div className="w-full min-h-screen p-2 sm:p-4 lg:p-6 bg-gradient-to-br from-blue-50 to-indigo-50">
+          <div className="bg-white rounded-lg shadow-2xl p-3 sm:p-4 lg:p-6 max-w-7xl mx-auto">
+            {/* Header */}
+            <h1 className="text-xl sm:text-2xl lg:text-4xl font-bold text-center mb-2 text-indigo-900">
+              🐜 ACO Antivirus Scanner
+            </h1>
+            <p className="text-center text-gray-600 mb-4 text-xs sm:text-sm lg:text-base hidden sm:block">
+              Watch how virtual ants find optimal paths using pheromone trails
+            </p>
+
+            {/* Controls */}
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 mb-4 justify-center">
+              <button
+                onClick={() => setIsRunning(!isRunning)}
+                className="flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-3 bg-indigo-600 text-white text-sm sm:text-base rounded-lg hover:bg-indigo-700 transition-colors shadow-lg w-full sm:w-auto"
+              >
+                {isRunning ? '⏸️ Pause' : '▶️ Start Scan'}
+              </button>
+              <button
+                onClick={reset}
+                className="flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-3 bg-gray-600 text-white text-sm sm:text-base rounded-lg hover:bg-gray-700 transition-colors shadow-lg w-full sm:w-auto"
+              >
+                🔄 Reset
+              </button>
+              <button
+                onClick={() => setShowShortestPath(!showShortestPath)}
+                disabled={isRunning}
+                className={`flex items-center justify-center gap-2 px-4 sm:px-6 py-2 sm:py-3 text-white text-sm sm:text-base rounded-lg transition-colors shadow-lg w-full sm:w-auto ${showShortestPath ? 'bg-green-600 hover:bg-green-700' : 'bg-purple-600 hover:bg-purple-700'
+                  } ${isRunning ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                {showShortestPath ? '✓ Path Shown' : '🎯 Show Optimal Path'}
+              </button>
+            </div>
+
+            {/* Stats Dashboard */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3 mb-4">
+              <div className="bg-blue-100 p-2 sm:p-3 rounded-lg text-center">
+                <div className="text-xl sm:text-2xl lg:text-3xl font-bold text-blue-700">{step}</div>
+                <div className="text-xs sm:text-sm text-blue-600">Steps</div>
+              </div>
+              <div className="bg-green-100 p-2 sm:p-3 rounded-lg text-center">
+                <div className="text-xl sm:text-2xl lg:text-3xl font-bold text-green-700">{scannedCount}</div>
+                <div className="text-xs sm:text-sm text-green-600">Scanned</div>
+              </div>
+              <div className="bg-red-100 p-2 sm:p-3 rounded-lg text-center">
+                <div className="text-xl sm:text-2xl lg:text-3xl font-bold text-red-700">{virusFound}</div>
+                <div className="text-xs sm:text-sm text-red-600">Threats</div>
+              </div>
+              <div className="bg-purple-100 p-2 sm:p-3 rounded-lg text-center col-span-2 lg:col-span-1">
+                <div className="text-sm sm:text-base lg:text-lg font-bold text-purple-700">{currentPhase}</div>
+                <div className="text-xs sm:text-sm text-purple-600">Phase</div>
+              </div>
+            </div>
+
+            {/* Path Comparison Results */}
+            {pathComparison && (
+              <div className="bg-gradient-to-r from-green-50 to-blue-50 border-2 border-green-300 rounded-lg p-3 mb-4">
+                <h3 className="font-bold text-green-800 mb-2 text-sm sm:text-base flex items-center gap-2">
+                  🎯 Path Analysis Complete
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs sm:text-sm">
+                  <div className="bg-white p-2 rounded">
+                    <span className="font-semibold text-blue-700">ACO Path:</span>
+                    <span className="ml-2">{pathComparison.acoSteps} steps to virus</span>
+                  </div>
+                  <div className="bg-white p-2 rounded">
+                    <span className="font-semibold text-purple-700">Optimal Path:</span>
+                    <span className="ml-2">{pathComparison.theoreticalSteps} steps to virus</span>
+                  </div>
+                  <div className="bg-white p-2 rounded">
+                    <span className="font-semibold text-green-700">Efficiency:</span>
+                    <span className="ml-2">{pathComparison.efficiency}%</span>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Visualization Area */}
+            <div
+              className="bg-gray-100 rounded-lg p-3 sm:p-4 lg:p-6 mb-4 relative overflow-hidden"
+              style={{ height: isMobile ? '300px' : '400px' }}
+            >
+              <div className="absolute top-2 left-2 bg-white px-2 sm:px-3 py-1 rounded shadow text-xs sm:text-sm font-semibold z-20">
+                🟢 Clean | 🔴 Virus | ⚪ Unscanned
+              </div>
+
+              {showShortestPath && (
+                <div className="absolute top-2 right-2 bg-purple-600 text-white px-2 sm:px-3 py-1 rounded shadow text-xs sm:text-sm font-semibold z-20">
+                  🟣 Optimal Path
+                </div>
+              )}
+
+              {isRunning && (
+                <div className="absolute bottom-2 left-2 bg-blue-600 text-white px-2 sm:px-3 py-1 rounded shadow text-xs sm:text-sm font-semibold z-20 animate-pulse">
+                  Colored trails = Ant paths
+                </div>
+              )}
+
+              {/* SVG for path lines */}
+              <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 1 }}>
+                {/* Show optimal path if toggled */}
+                {showShortestPath && renderPathLines(shortestPath, '#9333ea', 0.4, true)}
+
+                {/* Show real-time ant trails as they move */}
+                {ants.map(ant => (
+                  ant.path.length > 1 && renderPathLines(ant.path, ant.color, 0.5, false)
+                ))}
+
+                {/* Show best path after completion */}
+                {bestPath.length > 0 && !isRunning && renderPathLines(bestPath, '#10b981', 0.7, true)}
+              </svg>
+
+              {/* Files */}
+              <div className={isMobile ? "file-grid" : ""}>
+                {files.map(file => (
+                  <div
+                    key={file.id}
+                    className="absolute transition-all duration-300"
+                    style={{
+                      left: `${file.x}px`,
+                      top: `${file.y}px`,
+                      transform: isMobile ? 'scale(0.8)' : 'scale(1)',
+                      zIndex: 10
+                    }}
+                  >
+                    {/* Pheromone glow */}
+                    <div
+                      className="absolute -inset-3 bg-yellow-300 rounded-full blur-md"
+                      style={{ opacity: getPheromoneOpacity(file.pheromone) * 0.5 }}
+                    />
+
+                    {/* File icon */}
+                    <div className="relative">
+                      <div className={`w-14 sm:w-16 lg:w-18 h-14 sm:h-16 lg:h-18 ${getFileColor(file)} rounded-lg flex items-center justify-center text-xl sm:text-2xl shadow-lg transition-all`}>
+                        {getFileIcon(file.type)}
+                      </div>
+                      <div className="text-xs text-center mt-1 font-semibold truncate w-14 sm:w-16">
+                        {file.name.split('.')[0]}
+                      </div>
+                      <div className="text-xs text-center text-gray-600 font-semibold">
+                        φ:{Math.round(file.pheromone)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Ants */}
+                {ants.map(ant => (
+                  <div
+                    key={ant.id}
+                    className="absolute transition-all duration-500"
+                    style={{
+                      left: `${ant.x}px`,
+                      top: `${ant.y}px`,
+                      transform: isMobile ? 'scale(0.8)' : 'scale(1)',
+                      zIndex: 15
+                    }}
+                  >
+                    <div
+                      className="w-7 sm:w-8 h-7 sm:h-8 rounded-full flex items-center justify-center text-white font-bold shadow-lg text-base sm:text-lg"
+                      style={{ backgroundColor: ant.color }}
+                    >
+                      🐜
+                    </div>
+                    <div className="text-xs text-center mt-1 font-semibold whitespace-nowrap" style={{ color: ant.color }}>
+                      Ant {ant.id + 1}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Info Boxes */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mb-3">
+              <div className="bg-yellow-50 p-3 rounded-lg border-2 border-yellow-200">
+                <h3 className="font-bold text-yellow-800 mb-2 flex items-center gap-2 text-sm sm:text-base">
+                  <span>💡</span> How It Works
+                </h3>
+                <ul className="text-xs sm:text-sm text-yellow-900 space-y-1">
+                  <li>• Ants choose files by pheromone strength</li>
+                  <li>• Colored trails show each ant's journey</li>
+                  <li>• Higher pheromone = higher priority</li>
+                  <li>• Virus detection boosts pheromones</li>
+                  <li>• 🟣 Purple = optimal path | 🟢 Green = best found</li>
+                </ul>
+              </div>
+
+              <div className="bg-red-50 p-3 rounded-lg border-2 border-red-200">
+                <h3 className="font-bold text-red-800 mb-2 flex items-center gap-2 text-sm sm:text-base">
+                  🐛 Threats Detected
+                </h3>
+                {threats.length > 0 ? (
+                  <ul className="text-xs sm:text-sm text-red-900 space-y-1 max-h-20 overflow-y-auto">
+                    {threats.map((threat, idx) => (
+                      <li key={idx}>⚠️ {threat}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs sm:text-sm text-red-700">No threats detected yet...</p>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="text-center text-xs sm:text-sm text-gray-600">
+              <p className="font-semibold">φ = Pheromone Level | Click "Show Optimal Path" to compare routes</p>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    ReactDOM.render(<ACOAntivirusModel />, document.getElementById('root'));
+  </script>
+</body>
+
+</html>
